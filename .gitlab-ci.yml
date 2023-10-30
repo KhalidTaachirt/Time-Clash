@@ -1,0 +1,81 @@
+stages:
+  - build_and_test
+  - deploy
+
+variables:
+  BUILD_NAME: TimeClash
+  UNITY_ACTIVATION_FILE: ./unity3d.alf
+  UNITY_VERSION: "2021.3.23f1" # Used Unity version
+  ITCH_USER: yogert
+  ITCH_PROJECT: time-clash
+  IMAGE: unityci/editor # https://hub.docker.com/r/unityci/editor
+  IMAGE_VERSION: 1 # Automatically uses the latest version
+  UNITY_DIR: $CI_PROJECT_DIR/game # Root of the project
+  VERSION_NUMBER_VAR: $CI_COMMIT_REF_SLUG-$CI_PIPELINE_ID-$CI_JOB_ID
+  VERSION_BUILD_VAR: $CI_PIPELINE_IID
+
+image: $IMAGE:$UNITY_VERSION-base-$IMAGE_VERSION
+
+.unity_before_script: &unity_before_script
+  before_script:
+    - chmod +x ./game/ci/before_script.sh && ./game/ci/before_script.sh
+
+.cache: &cache
+  cache:
+    key: "$CI_PROJECT_NAMESPACE-$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG-$TEST_PLATFORM"
+    paths:
+      - $UNITY_DIR/Library/
+
+.license: &license
+  rules:
+    - if: '$UNITY_LICENSE != null'
+      when: always
+
+.unity_defaults: &unity_defaults
+  <<:
+    - *unity_before_script
+    - *cache
+    - *license
+
+.build: &build
+  stage: build_and_test
+  <<: *unity_defaults
+  script:
+    - chmod +x ./game/ci/build.sh && ./game/ci/build.sh
+  artifacts:
+    paths:
+      - $UNITY_DIR/Builds/
+  tags:
+    - hva # School GitLab runner
+
+# Making WebGL build
+build-WebGL:
+  <<: *build
+  image: $IMAGE:$UNITY_VERSION-webgl-$IMAGE_VERSION
+  before_script:
+    - chmod +x ./game/ci/before_script.sh && ./game/ci/before_script.sh
+    - apt-get update && apt-get install ffmpeg -y
+  variables:
+    BUILD_TARGET: WebGL
+  rules:
+    - if: $CI_COMMIT_BRANCH == "build" ## Only make the build on the build branch
+
+## Uploads the WebGL build to Itch.io using butler
+itch:
+  image: dosowisko/butler
+  stage: deploy
+  script:
+    - VERSION=$CI_COMMIT_SHORT_SHA
+    - butler push "./game/Builds/WebGL/$BUILD_NAME" "$ITCH_USER/$ITCH_PROJECT:web" --userversion $VERSION 
+  only:
+    - build
+  tags:  
+    - hva
+
+workflow:
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+      when: never
+    - if: $CI_COMMIT_TAG
+      when: never
+    - when: always
